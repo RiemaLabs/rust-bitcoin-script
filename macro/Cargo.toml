@@ -10,7 +10,7 @@ license = "MIT"
 proc-macro = true
 
 [dependencies]
-bitcoin = { git = "https://github.com/rust-bitcoin/rust-bitcoin", branch = "bitvm" }
+bitcoin = { git = "https://github.com/RiemaLabs/rust-bitcoin", branch = "0.32.x-nubit" }
 quote = "1.0.23"
 proc-macro-error = "1.0.4"
 lazy_static = "1.4.0"
