@@ -48,11 +48,11 @@ pub fn parse(tokens: TokenStream) -> Vec<(Syntax, Span)> {
         let token_str = token.to_string();
         syntax.push(match (&token, token_str.as_ref()) {
             // Wrap for loops such that they return a Vec<ScriptBuf>
-            (Ident(_), ident_str) if ident_str == "for" => parse_for_loop(token, &mut tokens),
+            (Ident(_), "for") => parse_for_loop(token, &mut tokens),
             // Wrap if-else statements such that they return a Vec<ScriptBuf>
-            (Ident(_), ident_str) if ident_str == "if" => parse_if(token, &mut tokens),
+            (Ident(_), "if") => parse_if(token, &mut tokens),
             // Replace DEBUG with OP_RESERVED
-            (Ident(_), ident_str) if ident_str == "DEBUG" => {
+            (Ident(_), "DEBUG") => {
                 (Syntax::Opcode(OP_RESERVED), token.span())
             }
 
@@ -72,7 +72,7 @@ pub fn parse(tokens: TokenStream) -> Vec<(Syntax, Span)> {
             }
 
             (Group(inner), _) => {
-                let escape = TokenStream::from(inner.stream().clone());
+                let escape = inner.stream().clone();
                 (Syntax::Escape(escape), token.span())
             }
 
@@ -101,7 +101,7 @@ where
 {
     // Use a Vec here to get rid of warnings when the variable is overwritten
     let mut escape = quote! {
-        let mut script_var = Vec::with_capacity(256);
+        let mut script_var = bitcoin_script::Script::new("if");
     };
     escape.extend(std::iter::once(token.clone()));
 
@@ -111,9 +111,9 @@ where
                 let inner_block = block.stream();
                 escape.extend(quote! {
                     {
-                        script_var.extend_from_slice(script! {
+                        script_var = script_var.push_env_script(script! {
                             #inner_block
-                        }.as_bytes());
+                        });
                     }
                 });
 
@@ -131,10 +131,9 @@ where
     escape = quote! {
         {
             #escape;
-            bitcoin::script::ScriptBuf::from(script_var)
+            script_var
         }
-    }
-    .into();
+    };
     (Syntax::Escape(escape), token.span())
 }
 
@@ -143,22 +142,21 @@ where
     T: Iterator<Item = TokenTree>,
 {
     let mut escape = quote! {
-        let mut script_var = vec![];
+        let mut script_var = bitcoin_script::Script::new("for");
     };
     escape.extend(std::iter::once(token.clone()));
 
-    while let Some(for_token) = tokens.next() {
+    for for_token in tokens.by_ref() {
         match for_token {
             Group(block) if block.delimiter() == Delimiter::Brace => {
                 let inner_block = block.stream();
                 escape.extend(quote! {
                     {
-                        let next_script = script !{
+                        script_var = script_var.push_env_script(script !{
                             #inner_block
-                        };
-                        script_var.extend_from_slice(next_script.as_bytes());
+                        });
                     }
-                    bitcoin::script::ScriptBuf::from(script_var)
+                    script_var
                 });
                 break;
             }
@@ -169,7 +167,7 @@ where
         };
     }
 
-    (Syntax::Escape(quote! { { #escape } }.into()), token.span())
+    (Syntax::Escape(quote! { { #escape } }), token.span())
 }
 
 fn parse_escape<T>(token: TokenTree, tokens: &mut T) -> (Syntax, Span)
@@ -264,7 +262,7 @@ fn parse_int(token: TokenTree, negative: bool) -> (Syntax, Span) {
     let n: i64 = token_str.parse().unwrap_or_else(|err| {
         emit_error!(token.span(), "invalid number literal ({})", err);
     });
-    let n = if negative { n * -1 } else { n };
+    let n = if negative { -n } else { n };
     (Syntax::Int(n), token.span())
 }
 

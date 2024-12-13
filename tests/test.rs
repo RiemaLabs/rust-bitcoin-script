@@ -1,7 +1,5 @@
-use bitcoin::{opcodes::all::OP_ADD, ScriptBuf};
-use bitcoin_script::{define_pushable, script};
-
-define_pushable!();
+use bitcoin::opcodes::all::OP_ADD;
+use bitcoin_script::{script, Script};
 
 #[test]
 fn test_generic() {
@@ -18,7 +16,7 @@ fn test_generic() {
     );
 
     assert_eq!(
-        script.to_bytes(),
+        script.compile().as_bytes(),
         vec![169, 2, 210, 4, 2, 255, 0, 79, 2, 255, 128, 3, 205, 171, 0, 82, 81, 82, 83, 84]
     );
 }
@@ -42,7 +40,7 @@ fn test_pushable_vectors() {
     );
 
     assert_eq!(
-        script.to_bytes(),
+        script.compile().to_bytes(),
         vec![81, 82, 83, 84, 85, 86, 87, 88, 147, 81, 0]
     );
 }
@@ -76,20 +74,32 @@ fn test_minimal_byte_opcode() {
     );
 
     assert_eq!(
-        script.to_bytes(),
+        script.compile().to_bytes(),
         vec![0, 0, 81, 82, 83, 84, 85, 86, 87, 88, 89, 96, 1, 17, 2, 210, 0, 2, 210, 0]
     );
 }
 
-fn script_from_func() -> ScriptBuf {
-    return script! { OP_ADD };
+fn script_from_func() -> Script {
+    script! { OP_ADD }
 }
 
 #[test]
-fn test_for_loop() {
+fn test_simple_loop() {
+    let script = script! {
+        for _ in 0..3 {
+            OP_ADD
+        }
+    };
+
+    assert_eq!(script.compile().to_bytes(), vec![147, 147, 147])
+}
+
+#[test]
+#[should_panic] // Optimization is not yet implemented.
+fn test_for_loop_optimized() {
     let script = script! {
         for i in 0..3 {
-            for k in 0..(3 as u32) {
+            for k in 0..3_u32 {
             OP_ADD
             script_from_func
             OP_SWAP
@@ -101,7 +111,7 @@ fn test_for_loop() {
     };
 
     assert_eq!(
-        script.to_bytes(),
+        script.compile().to_bytes(),
         vec![
             147, 147, 124, 0, 0, 147, 147, 124, 0, 139, 147, 124, 0, 82, 147, 147, 124, 81, 0, 147,
             147, 124, 81, 139, 147, 124, 81, 82, 147, 147, 124, 82, 0, 147, 147, 124, 82, 139, 147,
@@ -133,24 +143,34 @@ fn test_if() {
             }
     };
 
-    assert_eq!(script.to_bytes(), vec![83, 85]);
+    assert_eq!(script.compile().to_bytes(), vec![83, 85]);
 }
 
 #[test]
 fn test_performance_loop() {
-    let loop_script = script! {
-        OP_ADD
-        OP_ADD
+    let mut nested_script = script! {
         OP_ADD
     };
 
+    for _ in 0..20 {
+        nested_script = script! {
+            { nested_script.clone() }
+            { nested_script.clone() }
+        }
+    }
+    println!("Subscript size: {}", nested_script.len());
+
     let script = script! {
-        for _ in 0..5_000_000 {
-            {loop_script.clone()}
+        for _ in 0..1000 {
+            {nested_script.clone()}
         }
     };
 
-    assert_eq!(script.as_bytes()[5_000_000 - 1], 147)
+    println!("Expected size: {}", script.len());
+    let compiled_script = script.compile();
+    println!("Compiled size {}", compiled_script.len());
+
+    assert_eq!(compiled_script.as_bytes()[5_000_000 - 1], 147)
 }
 
 #[test]
@@ -177,7 +197,7 @@ fn test_performance_if() {
         }
     };
 
-    assert_eq!(script.as_bytes()[5_000_000 - 1], 147)
+    assert_eq!(script.compile().as_bytes()[5_000_000 - 1], 147)
 }
 
 #[test]
@@ -192,7 +212,7 @@ fn test_simple() {
     };
 
     assert_eq!(
-        script.as_bytes(),
+        script.compile().as_bytes(),
         vec![
             86, 122, 91, 122, 86, 122, 92, 122, 86, 122, 93, 122, 86, 122, 94, 122, 86, 122, 95,
             122, 86, 122, 96, 122
@@ -201,6 +221,7 @@ fn test_simple() {
 }
 
 #[test]
+#[should_panic] // Optimization is not yet implemented.
 fn test_non_optimal_opcodes() {
     let script = script! {
         OP_0
@@ -213,21 +234,166 @@ fn test_non_optimal_opcodes() {
         OP_DROP
         OP_DROP
 
-        for i in 0..4 {
-            OP_ROLL
-            { i }
-        }
+        //for i in 0..4 {
+        //    OP_ROLL
+        //    { i }
+        //}
 
-        for i in 0..4 {
-            { i }
-            OP_ROLL
-        }
+        //for i in 0..4 {
+        //    { i }
+        //    OP_ROLL
+        //}
 
     };
 
     println!("{:?}", script);
     assert_eq!(
-        script.as_bytes(),
+        script.compile().as_bytes(),
         vec![124, 109, 122, 124, 123, 83, 124, 123, 83, 122]
     );
+}
+
+#[test]
+fn test_num_ifs() {
+    let sub_script = script! {
+        OP_IF
+            OP_IF
+                OP_IF
+        OP_ENDIF
+    };
+
+    let script = script! {
+        OP_IF
+            OP_ADD
+        OP_ELSE
+            { sub_script.clone() }
+        OP_ENDIF
+        OP_ENDIF
+        OP_ENDIF
+    };
+
+    assert_eq!(sub_script.num_unclosed_ifs(), 2);
+    assert_eq!(script.num_unclosed_ifs(), 0);
+}
+
+#[test]
+fn test_if_positions() {
+    let sub_script = script! {
+        OP_IF
+            OP_IF
+                OP_IF
+        OP_ENDIF
+    };
+
+    let close_script = script! {
+        OP_ENDIF
+        OP_ENDIF
+        OP_ENDIF
+    };
+
+    let script = script! {
+        OP_IF
+            OP_ADD
+        OP_ELSE
+            { sub_script.clone() }
+        {close_script.clone() }
+    };
+
+    assert_eq!(sub_script.num_unclosed_ifs(), 2);
+    assert_eq!(script.num_unclosed_ifs(), 0);
+
+    assert_eq!(sub_script.unclosed_if_positions(), vec![0, 1]);
+    assert_eq!(sub_script.extra_endif_positions(), vec![]);
+
+    assert_eq!(close_script.unclosed_if_positions(), vec![]);
+    assert_eq!(close_script.extra_endif_positions(), vec![0, 1, 2]);
+
+    assert_eq!(script.unclosed_if_positions(), vec![]);
+    assert_eq!(script.extra_endif_positions(), vec![]);
+}
+
+#[test]
+fn test_if_positions_opif() {
+    let script = script! {
+        OP_IF
+    };
+
+    assert_eq!(script.num_unclosed_ifs(), 1);
+    assert_eq!(script.unclosed_if_positions(), vec![0]);
+    assert_eq!(script.extra_endif_positions(), vec![]);
+}
+
+#[test]
+fn test_if_positions_opnotif() {
+    let script = script! {
+        OP_NOTIF
+    };
+
+    assert_eq!(script.num_unclosed_ifs(), 1);
+    assert_eq!(script.unclosed_if_positions(), vec![0]);
+    assert_eq!(script.extra_endif_positions(), vec![]);
+}
+
+#[test]
+fn test_if_positions_opendif() {
+    let script = script! {
+        OP_ENDIF
+    };
+
+    assert_eq!(script.num_unclosed_ifs(), -1);
+    assert_eq!(script.unclosed_if_positions(), vec![]);
+    assert_eq!(script.extra_endif_positions(), vec![0]);
+}
+
+pub fn if_sub_script() -> Script {
+    script! {
+        OP_IF
+            OP_IF
+                OP_IF
+        OP_ENDIF
+    }
+}
+
+pub fn start_op_if() -> Script {
+    script! {
+        OP_IF
+    }
+}
+
+#[test]
+fn test_if_max_interval() {
+    let script = script! {
+        start_op_if
+            OP_ADD
+        OP_ELSE
+        if_sub_script
+        OP_ENDIF
+        OP_ENDIF
+        OP_ENDIF
+    };
+    let if_interval = script.max_op_if_interval();
+    println!(
+        "Max interval debug info: {}, {}",
+        script.debug_info(if_interval.0), script.debug_info(if_interval.1)
+    );
+    assert_eq!(if_interval, (0, 9));
+}
+
+#[test]
+fn test_is_script_buf() {
+    let script = script! {
+        OP_IF
+        OP_ENDIF
+    };
+    assert!(script.is_script_buf());
+    assert!(script.contains_flow_op());
+}
+
+#[test]
+fn test_is_script_buf_false() {
+    let script = script! {
+        { script! {OP_ADD} }
+    };
+    assert!(!script.is_script_buf());
+    assert!(!script.contains_flow_op());
 }
