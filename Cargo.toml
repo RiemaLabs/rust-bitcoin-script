@@ -14,8 +14,10 @@ license = "MIT"
 repository = "https://github.com/RiemaLabs/rust-bitcoin-script"
 
 [dependencies]
-bitcoin = { git = "https://github.com/RiemaLabs/rust-bitcoin", branch = "0.32.x-nubit" }
+bitcoin = { version = "0.32.5" }
 lazy_static = "1.5.0"
 script-macro = { path = "./macro" }
 stdext = "0.3.3"
 
+[patch.crates-io]
+bitcoin = { git = "https://github.com/RiemaLabs/rust-bitcoin", branch = "0.32.x-nubit" }
