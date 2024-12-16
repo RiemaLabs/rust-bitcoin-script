@@ -342,7 +342,6 @@ impl StructuredScript {
     }
 
     pub fn compile(self) -> ScriptBuf {
-        println!("starting compile step");
         let mut script = Vec::with_capacity(self.size);
         let mut cache = HashMap::new();
         self.compile_to_bytes(&mut script, &mut cache);
